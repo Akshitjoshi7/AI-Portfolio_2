@@ -1,5 +1,8 @@
 # YouTube to Twitter Thread Generator
 
+🔗 **Live Demo:** https://huggingface.co/spaces/Akshitjoshi9897/yt-thread-generator
+
+
 A Streamlit app that turns a YouTube video into a concise 10-tweet Twitter/X thread. The app downloads audio from a YouTube URL, transcribes it with Whisper, and uses Groq's LLM API to generate an engaging tweet thread from the transcript.
 
 ![Demo](demo.gif)
