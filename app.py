@@ -1,102 +1,221 @@
-import streamlit as st
-from dotenv import load_dotenv
+import hashlib
 import os
-import glob
 import tempfile
 
-# Load environment variables from .env file
+import chromadb
+import fitz
+import streamlit as st
+from dotenv import load_dotenv
+from groq import Groq
+from sentence_transformers import SentenceTransformer
+
+
 load_dotenv()
 
-# Get GROQ API key from environment variable
-GROQ_API_KEY = os.getenv('GROQ_API_KEY')
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+CHROMA_PATH = "./chroma_db"
+COLLECTION_NAME = "pdf_collection"
+CHUNK_SIZE = 500
+CHUNK_OVERLAP = 50
+TOP_K = 3
 
-# Hardcoded transcript for now
-transcript = "AI is changing the world. Large language models are becoming the backbone of modern software. Every startup is racing to build AI products."
 
-def is_ffmpeg_missing_error(error):
-    error_text = str(error).lower()
-    return "winerror 2" in error_text or "ffmpeg" in error_text
+@st.cache_resource
+def load_embedding_model():
+    return SentenceTransformer("all-MiniLM-L6-v2")
 
-def transcribe_youtube(youtube_url):
+
+@st.cache_resource
+def get_chroma_client():
+    return chromadb.PersistentClient(path=CHROMA_PATH)
+
+
+def get_collection(reset=False):
+    client = get_chroma_client()
+
+    if reset:
+        try:
+            client.delete_collection(COLLECTION_NAME)
+        except Exception:
+            pass
+
+    return client.get_or_create_collection(name=COLLECTION_NAME)
+
+
+def extract_pdf_text(pdf_file):
+    text_by_page = []
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+        temp_file.write(pdf_file.getvalue())
+        temp_path = temp_file.name
+
     try:
-        import whisper
-        from yt_dlp import YoutubeDL
+        document = fitz.open(temp_path)
+        for page_number, page in enumerate(document, start=1):
+            page_text = page.get_text().strip()
+            if page_text:
+                text_by_page.append((page_number, page_text))
+        document.close()
+    finally:
+        os.remove(temp_path)
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            ydl_opts = {
-                'format': 'worstaudio/worst',
-                'outtmpl': 'audio.%(ext)s',
-                'paths': {'home': temp_dir},
-                'quiet': True,
-                'no_warnings': True,
-            }
+    return text_by_page
 
-            with YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(youtube_url, download=True)
-                audio_path = ydl.prepare_filename(info)
 
-            if not os.path.exists(audio_path):
-                audio_files = glob.glob(os.path.join(temp_dir, 'audio.*'))
-                if not audio_files:
-                    raise FileNotFoundError("Downloaded audio file was not found")
-                audio_path = audio_files[0]
+def chunk_text(text_by_page):
+    chunks = []
+    step = CHUNK_SIZE - CHUNK_OVERLAP
 
-            model = whisper.load_model("tiny")
-            try:
-                result = model.transcribe(audio_path)
-            except Exception as e:
-                if is_ffmpeg_missing_error(e):
-                    st.error("Please install ffmpeg from https://ffmpeg.org/download.html")
-                raise
+    for page_number, page_text in text_by_page:
+        start = 0
+        while start < len(page_text):
+            chunk = page_text[start : start + CHUNK_SIZE].strip()
+            if chunk:
+                chunks.append(
+                    {
+                        "text": chunk,
+                        "page": page_number,
+                    }
+                )
+            start += step
 
-            text = result.get("text", "").strip()
+    return chunks
 
-            if not text:
-                raise ValueError("Whisper returned an empty transcript")
 
-            return text
-    except Exception as e:
-        st.warning(f"Using fallback transcript because transcription failed: {e}")
-        return transcript
+def index_pdf(pdf_file):
+    text_by_page = extract_pdf_text(pdf_file)
+    chunks = chunk_text(text_by_page)
 
-# Function to send transcript to Groq API and get tweets
-def generate_tweets(transcript):
-    from groq import Groq
+    if not chunks:
+        raise ValueError("No readable text was found in this PDF.")
+
+    model = load_embedding_model()
+    collection = get_collection(reset=True)
+
+    texts = [chunk["text"] for chunk in chunks]
+    embeddings = model.encode(texts).tolist()
+    ids = [f"chunk-{index}" for index in range(len(chunks))]
+    metadatas = [
+        {
+            "page": chunk["page"],
+            "chunk_index": index + 1,
+        }
+        for index, chunk in enumerate(chunks)
+    ]
+
+    collection.add(
+        ids=ids,
+        documents=texts,
+        embeddings=embeddings,
+        metadatas=metadatas,
+    )
+
+    return len(chunks)
+
+
+def retrieve_chunks(question):
+    model = load_embedding_model()
+    collection = get_collection()
+    question_embedding = model.encode([question]).tolist()[0]
+
+    results = collection.query(
+        query_embeddings=[question_embedding],
+        n_results=TOP_K,
+        include=["documents", "metadatas", "distances"],
+    )
+
+    documents = results.get("documents", [[]])[0]
+    metadatas = results.get("metadatas", [[]])[0]
+    distances = results.get("distances", [[]])[0]
+
+    return [
+        {
+            "text": document,
+            "metadata": metadata,
+            "distance": distance,
+        }
+        for document, metadata, distance in zip(documents, metadatas, distances)
+    ]
+
+
+def generate_answer(question, chunks):
+    if not GROQ_API_KEY:
+        raise ValueError("GROQ_API_KEY is missing. Add it to your .env file.")
+
+    context = "\n\n".join(
+        f"Source {index} (page {chunk['metadata']['page']}):\n{chunk['text']}"
+        for index, chunk in enumerate(chunks, start=1)
+    )
+
     client = Groq(api_key=GROQ_API_KEY)
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
             {
+                "role": "system",
+                "content": (
+                    "You answer questions using only the provided PDF context. "
+                    "If the answer is not in the context, say you do not know. "
+                    "Cite sources using the source numbers provided."
+                ),
+            },
+            {
                 "role": "user",
-                "content": f"""Convert this transcript into a 10-tweet Twitter thread.
-Number each tweet 1-10.
-Each tweet must be under 280 characters.
-Make it engaging and insightful.
-
-Transcript: {transcript}"""
-            }
-        ]
+                "content": f"Context:\n{context}\n\nQuestion: {question}",
+            },
+        ],
+        temperature=0.2,
     )
-    result = response.choices[0].message.content
-    tweets = [line.strip() for line in result.split('\n') if line.strip()]
-    return tweets
 
-# Streamlit app
-st.title("YouTube to Twitter Thread Generator")
+    return response.choices[0].message.content
 
-# Text input box for YouTube URL
-youtube_url = st.text_input("Enter YouTube URL:")
 
-# Button: "Generate Thread"
-if st.button("Generate Thread"):
-    if youtube_url:
-        with st.spinner("Downloading and transcribing..."):
-            real_transcript = transcribe_youtube(youtube_url)
+def file_hash(pdf_file):
+    return hashlib.sha256(pdf_file.getvalue()).hexdigest()
 
-        tweets = generate_tweets(real_transcript)
-        
-        # Display tweets numbered 1-10 on screen
-        for i, tweet in enumerate(tweets[:10], start=1):
-            st.write(f"{i}. {tweet.strip()}")
-    else:
-        st.warning("Please enter a YouTube URL")
+
+st.set_page_config(page_title="PDF Chat", page_icon="📄", layout="wide")
+st.title("PDF Chat - RAG Question Answering System")
+
+uploaded_file = st.file_uploader("Upload a PDF", type=["pdf"])
+
+if uploaded_file:
+    current_file_hash = file_hash(uploaded_file)
+
+    if st.session_state.get("pdf_hash") != current_file_hash:
+        with st.spinner("Processing PDF and creating vector index..."):
+            try:
+                chunk_count = index_pdf(uploaded_file)
+                st.session_state["pdf_hash"] = current_file_hash
+                st.session_state["chunk_count"] = chunk_count
+                st.session_state["pdf_ready"] = True
+            except Exception as error:
+                st.session_state["pdf_ready"] = False
+                st.error(f"Failed to process PDF: {error}")
+
+    if st.session_state.get("pdf_ready"):
+        st.success(f"PDF indexed successfully with {st.session_state['chunk_count']} chunks.")
+
+        question = st.text_input("Ask a question about the PDF")
+
+        if question:
+            with st.spinner("Retrieving sources and generating answer..."):
+                try:
+                    source_chunks = retrieve_chunks(question)
+                    answer = generate_answer(question, source_chunks)
+
+                    st.subheader("Answer")
+                    st.write(answer)
+
+                    st.subheader("Source Chunks")
+                    for index, chunk in enumerate(source_chunks, start=1):
+                        metadata = chunk["metadata"]
+                        with st.expander(
+                            f"Source {index} - Page {metadata['page']}, "
+                            f"Chunk {metadata['chunk_index']}"
+                        ):
+                            st.write(chunk["text"])
+                except Exception as error:
+                    st.error(f"Failed to answer question: {error}")
+else:
+    st.info("Upload a PDF to start asking questions.")

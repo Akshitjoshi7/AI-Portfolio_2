@@ -1,28 +1,28 @@
-# YouTube to Twitter Thread Generator
+# PDF Chat - RAG Question Answering System
 
-🔗 **Live Demo:** https://huggingface.co/spaces/Akshitjoshi9897/yt-thread-generator
+[Live Demo](URL)
 
-
-A Streamlit app that turns a YouTube video into a concise 10-tweet Twitter/X thread. The app downloads audio from a YouTube URL, transcribes it with Whisper, and uses Groq's LLM API to generate an engaging tweet thread from the transcript.
+Upload any PDF and ask questions using a Retrieval-Augmented Generation (RAG) pipeline. The app extracts PDF text, chunks it into searchable sections, stores semantic embeddings in ChromaDB, and uses Groq's LLM API to answer questions with source citations.
 
 ![Demo](demo.gif)
 
 ## Features
 
-- YouTube audio transcription from pasted video URLs
-- AI-generated 10-tweet Twitter/X threads
-- Groq LLM integration for fast text generation
-- Fallback transcript if YouTube download or transcription fails
-- Simple Streamlit interface
+- PDF text extraction and chunking
+- Semantic embeddings for similarity search
+- ChromaDB vector store for document retrieval
+- Groq LLM-powered question answering
+- Source citations for grounded responses
+- Streamlit interface for PDF upload and chat
 
 ## Tech Stack
 
 - Python
 - Streamlit
-- Whisper
-- yt-dlp
+- ChromaDB
+- sentence-transformers
+- PyMuPDF
 - Groq
-- LangChain
 
 ## Setup
 
@@ -30,13 +30,13 @@ A Streamlit app that turns a YouTube video into a concise 10-tweet Twitter/X thr
 
 ```bash
 git clone https://github.com/Akshitjoshi7/AI-Portfolio.git
-cd AI-Portfolio/project-1-yt-thread
+cd AI-Portfolio/project-2-rag-pdf
 ```
 
 2. Install dependencies:
 
 ```bash
-pip install streamlit python-dotenv groq openai-whisper yt-dlp langchain
+pip install streamlit python-dotenv chromadb sentence-transformers pymupdf groq
 ```
 
 3. Create a `.env` file in the project root:
@@ -51,10 +51,12 @@ GROQ_API_KEY=your_groq_api_key_here
 streamlit run app.py
 ```
 
-## Screenshot
+## How It Works
 
-Add a screenshot of the running app here.
-
-```markdown
-![Screenshot](screenshot.png)
-```
+1. Upload a PDF document.
+2. The app extracts text using PyMuPDF.
+3. Text is split into chunks for retrieval.
+4. Chunks are embedded with sentence-transformers.
+5. Embeddings are stored and searched in ChromaDB.
+6. The most relevant chunks are sent to Groq for answer generation.
+7. The answer is returned with source citations.
