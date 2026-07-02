@@ -29,7 +29,7 @@ Upload any PDF and ask questions using a Retrieval-Augmented Generation (RAG) pi
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/Akshitjoshi7/AI-Portfolio.git
+git clone https://github.com/Akshitjoshi7/AI-Portfolio_2.git
 cd AI-Portfolio/project-2-rag-pdf
 ```
 
