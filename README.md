@@ -1,8 +1,10 @@
 # PDF Chat - RAG Question Answering System
 
-[Live Demo](URL)
+**Live Demo:** https://ai-portfolio2-acgcvrvr9qmupj2dixgzrw.streamlit.app
 
-Upload any PDF and ask questions using a Retrieval-Augmented Generation (RAG) pipeline. The app extracts PDF text, chunks it into searchable sections, stores semantic embeddings in ChromaDB, and uses Groq's LLM API to answer questions with source citations.
+Upload any PDF and ask questions using a Retrieval-Augmented Generation (RAG) pipeline. The app extracts PDF text, chunks it into searchable sections, stores semantic embeddings in FAISS, and uses Groq's LLM API to answer questions with source citations.
+
+## Demo
 
 ![Demo](demo.gif)
 
@@ -10,7 +12,7 @@ Upload any PDF and ask questions using a Retrieval-Augmented Generation (RAG) pi
 
 - PDF text extraction and chunking
 - Semantic embeddings for similarity search
-- ChromaDB vector store for document retrieval
+- FAISS vector search for document retrieval
 - Groq LLM-powered question answering
 - Source citations for grounded responses
 - Streamlit interface for PDF upload and chat
@@ -19,7 +21,7 @@ Upload any PDF and ask questions using a Retrieval-Augmented Generation (RAG) pi
 
 - Python
 - Streamlit
-- ChromaDB
+- FAISS
 - sentence-transformers
 - PyMuPDF
 - Groq
@@ -36,7 +38,7 @@ cd AI-Portfolio/project-2-rag-pdf
 2. Install dependencies:
 
 ```bash
-pip install streamlit python-dotenv chromadb sentence-transformers pymupdf groq
+pip install streamlit python-dotenv faiss-cpu sentence-transformers pymupdf groq
 ```
 
 3. Create a `.env` file in the project root:
@@ -57,6 +59,6 @@ streamlit run app.py
 2. The app extracts text using PyMuPDF.
 3. Text is split into chunks for retrieval.
 4. Chunks are embedded with sentence-transformers.
-5. Embeddings are stored and searched in ChromaDB.
+5. Embeddings are stored and searched in FAISS.
 6. The most relevant chunks are sent to Groq for answer generation.
 7. The answer is returned with source citations.
