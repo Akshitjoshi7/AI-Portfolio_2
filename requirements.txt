@@ -1,7 +1,7 @@
 streamlit
 groq
-chromadb==0.5.0
+chromadb==0.5.23
 sentence-transformers
 PyMuPDF
 python-dotenv
-torch
+numpy==1.26.4
