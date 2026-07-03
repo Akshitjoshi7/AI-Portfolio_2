@@ -2,8 +2,9 @@ import hashlib
 import os
 import tempfile
 
-import chromadb
+import faiss
 import fitz
+import numpy as np
 import streamlit as st
 from dotenv import load_dotenv
 from groq import Groq
@@ -12,9 +13,7 @@ from sentence_transformers import SentenceTransformer
 
 load_dotenv()
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-CHROMA_PATH = "./chroma_db"
-COLLECTION_NAME = "pdf_collection"
+GROQ_API_KEY = os.getenv('GROQ_API_KEY') or os.getenv('groq_api_key')
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
 TOP_K = 3
@@ -23,23 +22,6 @@ TOP_K = 3
 @st.cache_resource
 def load_embedding_model():
     return SentenceTransformer("all-MiniLM-L6-v2")
-
-
-@st.cache_resource
-def get_chroma_client():
-    return chromadb.PersistentClient(path=CHROMA_PATH)
-
-
-def get_collection(reset=False):
-    client = get_chroma_client()
-
-    if reset:
-        try:
-            client.delete_collection(COLLECTION_NAME)
-        except Exception:
-            pass
-
-    return client.get_or_create_collection(name=COLLECTION_NAME)
 
 
 def extract_pdf_text(pdf_file):
@@ -90,11 +72,9 @@ def index_pdf(pdf_file):
         raise ValueError("No readable text was found in this PDF.")
 
     model = load_embedding_model()
-    collection = get_collection(reset=True)
 
     texts = [chunk["text"] for chunk in chunks]
-    embeddings = model.encode(texts).tolist()
-    ids = [f"chunk-{index}" for index in range(len(chunks))]
+    embeddings = np.ascontiguousarray(model.encode(texts), dtype="float32")
     metadatas = [
         {
             "page": chunk["page"],
@@ -103,38 +83,38 @@ def index_pdf(pdf_file):
         for index, chunk in enumerate(chunks)
     ]
 
-    collection.add(
-        ids=ids,
-        documents=texts,
-        embeddings=embeddings,
-        metadatas=metadatas,
-    )
+    index = faiss.IndexFlatL2(embeddings.shape[1])
+    index.add(embeddings)
+
+    st.session_state["faiss_index"] = index
+    st.session_state["documents"] = texts
+    st.session_state["metadatas"] = metadatas
 
     return len(chunks)
 
 
 def retrieve_chunks(question):
+    index = st.session_state.get("faiss_index")
+    documents = st.session_state.get("documents", [])
+    metadatas = st.session_state.get("metadatas", [])
+
+    if index is None or index.ntotal == 0:
+        raise ValueError("No PDF index is available. Upload a PDF first.")
+
     model = load_embedding_model()
-    collection = get_collection()
-    question_embedding = model.encode([question]).tolist()[0]
+    question_embedding = np.ascontiguousarray(model.encode([question]), dtype="float32")
+    result_count = min(TOP_K, index.ntotal)
 
-    results = collection.query(
-        query_embeddings=[question_embedding],
-        n_results=TOP_K,
-        include=["documents", "metadatas", "distances"],
-    )
-
-    documents = results.get("documents", [[]])[0]
-    metadatas = results.get("metadatas", [[]])[0]
-    distances = results.get("distances", [[]])[0]
+    distances, indices = index.search(question_embedding, result_count)
 
     return [
         {
-            "text": document,
-            "metadata": metadata,
-            "distance": distance,
+            "text": documents[chunk_index],
+            "metadata": metadatas[chunk_index],
+            "distance": float(distance),
         }
-        for document, metadata, distance in zip(documents, metadatas, distances)
+        for distance, chunk_index in zip(distances[0], indices[0])
+        if chunk_index != -1
     ]
 
 
@@ -175,23 +155,24 @@ def file_hash(pdf_file):
 
 
 st.set_page_config(page_title="PDF Chat", page_icon="📄", layout="wide")
+st.write("API Key loaded:", bool(GROQ_API_KEY))
 st.title("PDF Chat - RAG Question Answering System")
 
 uploaded_file = st.file_uploader("Upload a PDF", type=["pdf"])
 
 if uploaded_file:
-    current_file_hash = file_hash(uploaded_file)
+    try:
+        current_file_hash = file_hash(uploaded_file)
 
-    if st.session_state.get("pdf_hash") != current_file_hash:
-        with st.spinner("Processing PDF and creating vector index..."):
-            try:
+        if st.session_state.get("pdf_hash") != current_file_hash:
+            with st.spinner("Processing PDF and creating vector index..."):
                 chunk_count = index_pdf(uploaded_file)
                 st.session_state["pdf_hash"] = current_file_hash
                 st.session_state["chunk_count"] = chunk_count
                 st.session_state["pdf_ready"] = True
-            except Exception as error:
-                st.session_state["pdf_ready"] = False
-                st.error(f"Failed to process PDF: {error}")
+    except Exception as error:
+        st.session_state["pdf_ready"] = False
+        st.error(str(error))
 
     if st.session_state.get("pdf_ready"):
         st.success(f"PDF indexed successfully with {st.session_state['chunk_count']} chunks.")

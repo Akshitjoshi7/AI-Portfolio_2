@@ -1,8 +1,7 @@
-streamlit==1.43.2
+streamlit
 groq
-chromadb==0.4.24
+faiss-cpu
 sentence-transformers
 PyMuPDF
 python-dotenv
-numpy==1.26.4
-pydantic==1.10.13
+numpy
